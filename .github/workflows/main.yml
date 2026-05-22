@@ -1,4 +1,4 @@
-name: Build NovaBrowser Dev APK
+name: Build NovaBrowser Pro Dev APK
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Create Android dev browser project
+      - name: Create phone-first Android dev browser
         run: |
           mkdir -p app/src/main/java/com/nova/browser
           mkdir -p app/src/main/res/values
@@ -22,14 +22,18 @@ jobs:
                   gradlePluginPortal()
               }
           }
+
           dependencyResolutionManagement {
               repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+
               repositories {
                   google()
                   mavenCentral()
               }
           }
-          rootProject.name = "NovaBrowserDev"
+
+          rootProject.name = "NovaBrowserProDev"
+
           include ':app'
           EOF
 
@@ -52,8 +56,8 @@ jobs:
                   applicationId 'com.nova.browser'
                   minSdk 23
                   targetSdk 35
-                  versionCode 2
-                  versionName '2.0-dev'
+                  versionCode 3
+                  versionName '3.0-pro-dev'
               }
           }
           EOF
@@ -62,7 +66,9 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
               <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+                  <item name="android:windowFullscreen">false</item>
                   <item name="android:fontFamily">sans</item>
+                  <item name="android:windowLightStatusBar">false</item>
               </style>
           </resources>
           EOF
@@ -70,13 +76,14 @@ jobs:
           cat > app/src/main/AndroidManifest.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
               <uses-permission android:name="android.permission.DOWNLOAD_WITHOUT_NOTIFICATION" />
 
               <application
                   android:theme="@style/AppTheme"
-                  android:label="NovaBrowser Dev"
+                  android:label="NovaBrowser Pro Dev"
                   android:usesCleartextTraffic="true"
                   android:allowBackup="true"
                   android:supportsRtl="true">
@@ -87,7 +94,18 @@ jobs:
 
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
+
                           <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+
+                      <intent-filter>
+                          <action android:name="android.intent.action.VIEW" />
+
+                          <category android:name="android.intent.category.DEFAULT" />
+                          <category android:name="android.intent.category.BROWSABLE" />
+
+                          <data android:scheme="http" />
+                          <data android:scheme="https" />
                       </intent-filter>
 
                   </activity>
@@ -111,6 +129,7 @@ jobs:
           import android.view.ViewGroup;
           import android.webkit.ConsoleMessage;
           import android.webkit.DownloadListener;
+          import android.webkit.JavascriptInterface;
           import android.webkit.URLUtil;
           import android.webkit.ValueCallback;
           import android.webkit.WebChromeClient;
@@ -121,298 +140,485 @@ jobs:
           import android.webkit.WebViewClient;
           import android.widget.Button;
           import android.widget.EditText;
+          import android.widget.FrameLayout;
+          import android.widget.HorizontalScrollView;
           import android.widget.LinearLayout;
           import android.widget.ScrollView;
           import android.widget.TextView;
           import android.widget.Toast;
 
           import java.util.ArrayList;
+          import java.util.Locale;
 
           public class MainActivity extends Activity {
+
               private WebView webView;
               private EditText addressBar;
-              private LinearLayout devPanel;
-              private TextView logView;
+              private FrameLayout root;
+              private LinearLayout devSheet;
+              private TextView panelOutput;
+              private TextView panelTitle;
               private EditText jsInput;
-              private final ArrayList<String> logs = new ArrayList<>();
-              private boolean adBlockEnabled = true;
 
-              @SuppressLint("SetJavaScriptEnabled")
+              private final ArrayList<String> consoleLogs = new ArrayList<>();
+              private final ArrayList<String> networkLogs = new ArrayList<>();
+
+              private boolean adBlockEnabled = true;
+              private boolean desktopMode = false;
+
+              @SuppressLint({"SetJavaScriptEnabled","AddJavascriptInterface"})
               @Override
               protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
 
                   WebView.setWebContentsDebuggingEnabled(true);
 
-                  LinearLayout root = new LinearLayout(this);
-                  root.setOrientation(LinearLayout.VERTICAL);
+                  root = new FrameLayout(this);
 
-                  LinearLayout toolbar = new LinearLayout(this);
-                  toolbar.setOrientation(LinearLayout.HORIZONTAL);
-                  toolbar.setGravity(Gravity.CENTER_VERTICAL);
+                  LinearLayout browser = new LinearLayout(this);
+                  browser.setOrientation(LinearLayout.VERTICAL);
 
-                  Button back = smallButton("‹");
-                  Button forward = smallButton("›");
-                  Button reload = smallButton("↻");
-                  Button home = smallButton("⌂");
-                  Button dev = smallButton("DEV");
+                  LinearLayout topBar = new LinearLayout(this);
+                  topBar.setOrientation(LinearLayout.HORIZONTAL);
+                  topBar.setBackgroundColor(Color.rgb(24,24,24));
+                  topBar.setPadding(6,6,6,6);
+
+                  Button home = button("⌂");
+                  Button reload = button("↻");
 
                   addressBar = new EditText(this);
-                  addressBar.setSingleLine(true);
                   addressBar.setText("https://google.com");
+                  addressBar.setSingleLine(true);
+                  addressBar.setTextColor(Color.WHITE);
+                  addressBar.setHintTextColor(Color.GRAY);
+                  addressBar.setBackgroundColor(Color.rgb(50,50,50));
 
-                  Button go = smallButton("Go");
+                  Button go = button("Go");
 
-                  toolbar.addView(back);
-                  toolbar.addView(forward);
-                  toolbar.addView(reload);
-                  toolbar.addView(home);
-                  toolbar.addView(addressBar, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-                  toolbar.addView(go);
-                  toolbar.addView(dev);
+                  topBar.addView(home,new LinearLayout.LayoutParams(100,100));
+                  topBar.addView(reload,new LinearLayout.LayoutParams(100,100));
+                  topBar.addView(addressBar,new LinearLayout.LayoutParams(0,100,1));
+                  topBar.addView(go,new LinearLayout.LayoutParams(120,100));
 
                   webView = new WebView(this);
 
-                  devPanel = createDevPanel();
-                  devPanel.setVisibility(View.GONE);
+                  LinearLayout bottomBar = new LinearLayout(this);
+                  bottomBar.setOrientation(LinearLayout.HORIZONTAL);
+                  bottomBar.setBackgroundColor(Color.rgb(18,18,18));
 
-                  root.addView(toolbar);
-                  root.addView(webView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
-                  root.addView(devPanel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 520));
+                  Button back = button("Back");
+                  Button forward = button("Forward");
+                  Button dev = button("DEV");
+                  Button desktop = button("Desktop");
+
+                  bottomBar.addView(back,new LinearLayout.LayoutParams(0,120,1));
+                  bottomBar.addView(forward,new LinearLayout.LayoutParams(0,120,1));
+                  bottomBar.addView(dev,new LinearLayout.LayoutParams(0,120,1));
+                  bottomBar.addView(desktop,new LinearLayout.LayoutParams(0,120,1));
+
+                  browser.addView(topBar,new LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          ViewGroup.LayoutParams.WRAP_CONTENT
+                  ));
+
+                  browser.addView(webView,new LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          0,
+                          1
+                  ));
+
+                  browser.addView(bottomBar,new LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          ViewGroup.LayoutParams.WRAP_CONTENT
+                  ));
+
+                  root.addView(browser);
+
+                  devSheet = createDevPanel();
+
+                  FrameLayout.LayoutParams sheetParams =
+                          new FrameLayout.LayoutParams(
+                                  ViewGroup.LayoutParams.MATCH_PARENT,
+                                  900
+                          );
+
+                  sheetParams.gravity = Gravity.BOTTOM;
+
+                  devSheet.setVisibility(View.GONE);
+
+                  root.addView(devSheet,sheetParams);
 
                   setContentView(root);
 
-                  WebSettings settings = webView.getSettings();
-                  settings.setJavaScriptEnabled(true);
-                  settings.setDomStorageEnabled(true);
-                  settings.setLoadsImagesAutomatically(true);
-                  settings.setBuiltInZoomControls(true);
-                  settings.setDisplayZoomControls(false);
-                  settings.setUseWideViewPort(true);
-                  settings.setLoadWithOverviewMode(true);
-                  settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-                  settings.setDatabaseEnabled(true);
+                  configureWebView();
 
-                  webView.setWebViewClient(new WebViewClient() {
-                      @Override
-                      public void onPageFinished(WebView view, String url) {
-                          addressBar.setText(url);
-                          log("PAGE", "finished: " + url);
-                          super.onPageFinished(view, url);
-                      }
+                  home.setOnClickListener(v -> webView.loadUrl("https://google.com"));
 
-                      @Override
-                      public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-                          String url = request.getUrl().toString();
-                          log("REQ", url);
-
-                          if (adBlockEnabled && isBlocked(url)) {
-                              log("BLOCK", url);
-                              return new WebResourceResponse("text/plain", "utf-8", null);
-                          }
-
-                          return super.shouldInterceptRequest(view, request);
-                      }
-                  });
-
-                  webView.setWebChromeClient(new WebChromeClient() {
-                      @Override
-                      public boolean onConsoleMessage(ConsoleMessage message) {
-                          log("CONSOLE", message.messageLevel() + ": " + message.message());
-                          return true;
-                      }
-                  });
-
-                  webView.setDownloadListener(new DownloadListener() {
-                      @Override
-                      public void onDownloadStart(String url, String userAgent, String contentDisposition, String mimetype, long contentLength) {
-                          DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
-                          request.setMimeType(mimetype);
-                          request.addRequestHeader("User-Agent", userAgent);
-                          request.setTitle(URLUtil.guessFileName(url, contentDisposition, mimetype));
-                          request.setDescription("Downloading");
-                          request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-                          request.setDestinationInExternalPublicDir(
-                                  Environment.DIRECTORY_DOWNLOADS,
-                                  URLUtil.guessFileName(url, contentDisposition, mimetype)
-                          );
-
-                          DownloadManager manager = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
-                          manager.enqueue(request);
-                          Toast.makeText(MainActivity.this, "Download started", Toast.LENGTH_SHORT).show();
-                      }
-                  });
+                  reload.setOnClickListener(v -> webView.reload());
 
                   go.setOnClickListener(v -> loadInput());
-                  addressBar.setOnEditorActionListener((v, actionId, event) -> {
+
+                  addressBar.setOnEditorActionListener((v,actionId,event)->{
                       loadInput();
                       return true;
                   });
 
                   back.setOnClickListener(v -> {
-                      if (webView.canGoBack()) webView.goBack();
+                      if(webView.canGoBack()) webView.goBack();
                   });
 
                   forward.setOnClickListener(v -> {
-                      if (webView.canGoForward()) webView.goForward();
+                      if(webView.canGoForward()) webView.goForward();
                   });
 
-                  reload.setOnClickListener(v -> webView.reload());
-                  home.setOnClickListener(v -> webView.loadUrl("https://google.com"));
-                  dev.setOnClickListener(v -> toggleDevPanel());
+                  dev.setOnClickListener(v -> {
+                      if(devSheet.getVisibility()==View.VISIBLE){
+                          devSheet.setVisibility(View.GONE);
+                      } else {
+                          devSheet.setVisibility(View.VISIBLE);
+                      }
+                  });
+
+                  desktop.setOnClickListener(v -> {
+                      desktopMode=!desktopMode;
+
+                      if(desktopMode){
+                          webView.getSettings().setUserAgentString(
+                                  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/125 Safari/537.36"
+                          );
+                      } else {
+                          webView.getSettings().setUserAgentString(null);
+                      }
+
+                      webView.reload();
+                  });
 
                   webView.loadUrl("https://google.com");
               }
 
-              private Button smallButton(String text) {
-                  Button b = new Button(this);
-                  b.setText(text);
-                  b.setAllCaps(false);
-                  b.setTextSize(12);
-                  b.setPadding(4, 2, 4, 2);
-                  return b;
-              }
+              private LinearLayout createDevPanel(){
 
-              private LinearLayout createDevPanel() {
                   LinearLayout panel = new LinearLayout(this);
                   panel.setOrientation(LinearLayout.VERTICAL);
-                  panel.setBackgroundColor(Color.rgb(18, 18, 18));
-                  panel.setPadding(8, 8, 8, 8);
+                  panel.setBackgroundColor(Color.rgb(10,10,10));
 
-                  LinearLayout row = new LinearLayout(this);
-                  row.setOrientation(LinearLayout.HORIZONTAL);
+                  panelTitle = new TextView(this);
+                  panelTitle.setText("Developer Tools");
+                  panelTitle.setTextColor(Color.WHITE);
+                  panelTitle.setTextSize(18);
 
-                  Button info = smallButton("Info");
-                  Button dom = smallButton("DOM");
-                  Button clear = smallButton("Clear");
-                  Button adblock = smallButton("AdBlock");
-                  Button close = smallButton("Close");
-
-                  row.addView(info);
-                  row.addView(dom);
-                  row.addView(clear);
-                  row.addView(adblock);
-                  row.addView(close);
-
-                  jsInput = new EditText(this);
-                  jsInput.setSingleLine(true);
-                  jsInput.setHint("Run JS, example: document.title");
-                  jsInput.setTextColor(Color.WHITE);
-                  jsInput.setHintTextColor(Color.GRAY);
-
-                  Button runJs = smallButton("Run JS");
-
-                  logView = new TextView(this);
-                  logView.setTextColor(Color.GREEN);
-                  logView.setTextSize(11);
-                  logView.setText("Dev panel ready\n");
+                  panelOutput = new TextView(this);
+                  panelOutput.setTextColor(Color.GREEN);
+                  panelOutput.setTextSize(11);
 
                   ScrollView scroll = new ScrollView(this);
-                  scroll.addView(logView);
+                  scroll.addView(panelOutput);
 
-                  panel.addView(row);
-                  panel.addView(jsInput);
-                  panel.addView(runJs);
-                  panel.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+                  jsInput = new EditText(this);
+                  jsInput.setHint("JavaScript");
+                  jsInput.setTextColor(Color.WHITE);
+                  jsInput.setHintTextColor(Color.GRAY);
+                  jsInput.setBackgroundColor(Color.rgb(40,40,40));
 
-                  info.setOnClickListener(v -> showInfo());
+                  LinearLayout tabs = new LinearLayout(this);
+
+                  Button console = button("Console");
+                  Button network = button("Network");
+                  Button dom = button("DOM");
+                  Button runJs = button("Run JS");
+
+                  tabs.addView(console,new LinearLayout.LayoutParams(0,120,1));
+                  tabs.addView(network,new LinearLayout.LayoutParams(0,120,1));
+                  tabs.addView(dom,new LinearLayout.LayoutParams(0,120,1));
+                  tabs.addView(runJs,new LinearLayout.LayoutParams(0,120,1));
+
+                  console.setOnClickListener(v -> showConsole());
+
+                  network.setOnClickListener(v -> showNetwork());
+
                   dom.setOnClickListener(v -> inspectDom());
-                  clear.setOnClickListener(v -> {
-                      logs.clear();
-                      logView.setText("");
-                  });
-                  adblock.setOnClickListener(v -> {
-                      adBlockEnabled = !adBlockEnabled;
-                      log("PRIVACY", "AdBlock: " + (adBlockEnabled ? "ON" : "OFF"));
-                  });
-                  close.setOnClickListener(v -> devPanel.setVisibility(View.GONE));
+
                   runJs.setOnClickListener(v -> runJavaScript());
+
+                  panel.addView(panelTitle);
+                  panel.addView(tabs);
+                  panel.addView(scroll,new LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          0,
+                          1
+                  ));
+                  panel.addView(jsInput);
 
                   return panel;
               }
 
-              private void toggleDevPanel() {
-                  devPanel.setVisibility(devPanel.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);
-              }
+              private void configureWebView(){
 
-              private void showInfo() {
-                  String js =
-                          "(function(){return JSON.stringify({" +
-                                  "title:document.title," +
-                                  "url:location.href," +
-                                  "links:document.links.length," +
-                                  "scripts:document.scripts.length," +
-                                  "images:document.images.length" +
-                                  "});})()";
+                  WebSettings s = webView.getSettings();
 
-                  webView.evaluateJavascript(js, value -> log("INFO", value));
-              }
+                  s.setJavaScriptEnabled(true);
+                  s.setDomStorageEnabled(true);
+                  s.setDatabaseEnabled(true);
+                  s.setBuiltInZoomControls(true);
+                  s.setDisplayZoomControls(false);
+                  s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
 
-              private void inspectDom() {
-                  String js = "(function(){return document.documentElement.outerHTML.substring(0,3000);})()";
-                  webView.evaluateJavascript(js, value -> log("DOM", value));
-              }
+                  webView.addJavascriptInterface(new DevBridge(),"NovaDev");
 
-              private void runJavaScript() {
-                  String code = jsInput.getText().toString().trim();
-                  if (code.isEmpty()) return;
+                  webView.setWebViewClient(new WebViewClient(){
 
-                  webView.evaluateJavascript(
-                          "(function(){try{return String(" + code + ");}catch(e){return 'ERROR: '+e.message;}})();",
-                          new ValueCallback<String>() {
-                              @Override
-                              public void onReceiveValue(String value) {
-                                  log("JS", value);
-                              }
-                          });
-              }
+                      @Override
+                      public WebResourceResponse shouldInterceptRequest(
+                              WebView view,
+                              WebResourceRequest request
+                      ){
 
-              private void loadInput() {
-                  String input = addressBar.getText().toString().trim();
-                  if (input.isEmpty()) return;
+                          String url = request.getUrl().toString();
 
-                  if (input.contains(".") && !input.contains(" ")) {
-                      if (!input.startsWith("http://") && !input.startsWith("https://")) {
-                          input = "https://" + input;
+                          networkLogs.add(url);
+
+                          if(adBlockEnabled && isBlocked(url)){
+                              return new WebResourceResponse(
+                                      "text/plain",
+                                      "utf-8",
+                                      null
+                              );
+                          }
+
+                          return super.shouldInterceptRequest(view,request);
                       }
-                  } else {
-                      input = "https://www.google.com/search?q=" + Uri.encode(input);
-                  }
 
-                  log("NAV", input);
-                  webView.loadUrl(input);
-              }
+                      @Override
+                      public void onPageFinished(WebView view,String url){
+                          addressBar.setText(url);
 
-              private boolean isBlocked(String url) {
-                  String lower = url.toLowerCase();
-                  return lower.contains("doubleclick.net")
-                          || lower.contains("googlesyndication")
-                          || lower.contains("adservice")
-                          || lower.contains("/ads?")
-                          || lower.contains("tracking")
-                          || lower.contains("analytics");
-              }
+                          injectHooks();
 
-              private void log(String type, String message) {
-                  runOnUiThread(() -> {
-                      String line = "[" + type + "] " + message + "\n";
-                      logs.add(line);
-                      if (logs.size() > 300) logs.remove(0);
+                          super.onPageFinished(view,url);
+                      }
+                  });
 
-                      StringBuilder builder = new StringBuilder();
-                      for (String l : logs) builder.append(l);
-                      logView.setText(builder.toString());
+                  webView.setWebChromeClient(new WebChromeClient(){
+
+                      @Override
+                      public boolean onConsoleMessage(ConsoleMessage msg){
+
+                          consoleLogs.add(
+                                  msg.messageLevel()+": "+msg.message()
+                          );
+
+                          return true;
+                      }
+                  });
+
+                  webView.setDownloadListener(new DownloadListener(){
+
+                      @Override
+                      public void onDownloadStart(
+                              String url,
+                              String userAgent,
+                              String contentDisposition,
+                              String mimetype,
+                              long contentLength
+                      ){
+
+                          try{
+
+                              DownloadManager.Request request =
+                                      new DownloadManager.Request(Uri.parse(url));
+
+                              request.setMimeType(mimetype);
+
+                              request.setDestinationInExternalPublicDir(
+                                      Environment.DIRECTORY_DOWNLOADS,
+                                      URLUtil.guessFileName(
+                                              url,
+                                              contentDisposition,
+                                              mimetype
+                                      )
+                              );
+
+                              DownloadManager manager =
+                                      (DownloadManager)getSystemService(
+                                              Context.DOWNLOAD_SERVICE
+                                      );
+
+                              manager.enqueue(request);
+
+                              Toast.makeText(
+                                      MainActivity.this,
+                                      "Download started",
+                                      Toast.LENGTH_SHORT
+                              ).show();
+
+                          } catch(Exception e){
+                              consoleLogs.add("DOWNLOAD ERROR "+e.getMessage());
+                          }
+                      }
                   });
               }
 
-              @Override
-              public void onBackPressed() {
-                  if (devPanel != null && devPanel.getVisibility() == View.VISIBLE) {
-                      devPanel.setVisibility(View.GONE);
-                  } else if (webView != null && webView.canGoBack()) {
-                      webView.goBack();
+              private void injectHooks(){
+
+                  String js =
+                          "(function(){" +
+                                  "if(window.__nova)return;" +
+                                  "window.__nova=true;" +
+
+                                  "var l=console.log;" +
+                                  "console.log=function(){" +
+                                  "try{NovaDev.console(Array.from(arguments).join(' '));}catch(e){}" +
+                                  "l.apply(console,arguments);" +
+                                  "};" +
+
+                                  "var f=window.fetch;" +
+                                  "if(f){" +
+                                  "window.fetch=function(){" +
+                                  "try{NovaDev.network(arguments[0]);}catch(e){}" +
+                                  "return f.apply(this,arguments);" +
+                                  "}" +
+                                  "}" +
+
+                                  "})();";
+
+                  webView.evaluateJavascript(js,null);
+              }
+
+              private void loadInput(){
+
+                  String input =
+                          addressBar.getText()
+                                  .toString()
+                                  .trim();
+
+                  if(input.isEmpty()) return;
+
+                  if(input.contains(".") && !input.contains(" ")){
+
+                      if(
+                              !input.startsWith("http://")
+                                      && !input.startsWith("https://")
+                      ){
+                          input="https://"+input;
+                      }
+
                   } else {
+
+                      input =
+                              "https://www.google.com/search?q="
+                                      + Uri.encode(input);
+                  }
+
+                  webView.loadUrl(input);
+              }
+
+              private void showConsole(){
+
+                  StringBuilder b = new StringBuilder();
+
+                  for(String s:consoleLogs){
+                      b.append(s).append("\n");
+                  }
+
+                  panelOutput.setText(b.toString());
+              }
+
+              private void showNetwork(){
+
+                  StringBuilder b = new StringBuilder();
+
+                  for(String s:networkLogs){
+                      b.append(s).append("\n");
+                  }
+
+                  panelOutput.setText(b.toString());
+              }
+
+              private void inspectDom(){
+
+                  webView.evaluateJavascript(
+                          "(function(){return document.documentElement.outerHTML.substring(0,4000);})()",
+                          value -> panelOutput.setText(clean(value))
+                  );
+              }
+
+              private void runJavaScript(){
+
+                  String code =
+                          jsInput.getText()
+                                  .toString()
+                                  .trim();
+
+                  if(code.isEmpty()) return;
+
+                  webView.evaluateJavascript(
+                          "(function(){try{return String("+code+");}catch(e){return 'ERROR '+e.message;}})();",
+                          value -> panelOutput.setText(clean(value))
+                  );
+              }
+
+              private boolean isBlocked(String url){
+
+                  String u = url.toLowerCase(Locale.US);
+
+                  return u.contains("doubleclick")
+                          || u.contains("analytics")
+                          || u.contains("tracking")
+                          || u.contains("googlesyndication");
+              }
+
+              private String clean(String s){
+
+                  if(s==null) return "";
+
+                  if(s.startsWith("\"") && s.endsWith("\"")){
+                      s=s.substring(1,s.length()-1);
+                  }
+
+                  return s
+                          .replace("\\n","\n")
+                          .replace("\\\"","\"");
+              }
+
+              private Button button(String text){
+
+                  Button b = new Button(this);
+
+                  b.setText(text);
+                  b.setAllCaps(false);
+                  b.setTextColor(Color.WHITE);
+                  b.setBackgroundColor(Color.rgb(45,45,45));
+
+                  return b;
+              }
+
+              @Override
+              public void onBackPressed(){
+
+                  if(devSheet!=null && devSheet.getVisibility()==View.VISIBLE){
+
+                      devSheet.setVisibility(View.GONE);
+
+                  } else if(webView!=null && webView.canGoBack()){
+
+                      webView.goBack();
+
+                  } else {
+
                       super.onBackPressed();
+                  }
+              }
+
+              public class DevBridge {
+
+                  @JavascriptInterface
+                  public void console(String msg){
+                      consoleLogs.add(msg);
+                  }
+
+                  @JavascriptInterface
+                  public void network(String msg){
+                      networkLogs.add(msg);
                   }
               }
           }
@@ -438,5 +644,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: NovaBrowserDev-debug-apk
+          name: NovaBrowserProDev-debug-apk
           path: app/build/outputs/apk/debug/*.apk
