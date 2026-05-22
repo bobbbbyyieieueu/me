@@ -1,0 +1,599 @@
+name: Build NovaBrowser Phone Clean APK
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Create clean phone browser with separate DevTools screen
+        run: |
+          mkdir -p app/src/main/java/com/nova/browser
+          mkdir -p app/src/main/res/values
+
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "NovaBrowserPhoneClean"
+          include ':app'
+          EOF
+
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.5.2' apply false
+          }
+          EOF
+
+          cat > app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.nova.browser'
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId 'com.nova.browser'
+                  minSdk 23
+                  targetSdk 35
+                  versionCode 5
+                  versionName '5.0-phone-clean'
+              }
+          }
+          EOF
+
+          cat > app/src/main/res/values/styles.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+                  <item name="android:fontFamily">sans</item>
+                  <item name="android:windowLightStatusBar">false</item>
+              </style>
+          </resources>
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+              <uses-permission android:name="android.permission.DOWNLOAD_WITHOUT_NOTIFICATION" />
+
+              <application
+                  android:theme="@style/AppTheme"
+                  android:label="NovaBrowser"
+                  android:usesCleartextTraffic="true"
+                  android:allowBackup="true"
+                  android:supportsRtl="true">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+
+                      <intent-filter>
+                          <action android:name="android.intent.action.VIEW" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                          <category android:name="android.intent.category.BROWSABLE" />
+                          <data android:scheme="http" />
+                          <data android:scheme="https" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/java/com/nova/browser/MainActivity.java <<'EOF'
+          package com.nova.browser;
+
+          import android.annotation.SuppressLint;
+          import android.app.Activity;
+          import android.app.DownloadManager;
+          import android.content.Context;
+          import android.graphics.Color;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.os.Environment;
+          import android.view.Gravity;
+          import android.webkit.ConsoleMessage;
+          import android.webkit.DownloadListener;
+          import android.webkit.JavascriptInterface;
+          import android.webkit.URLUtil;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebResourceResponse;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.widget.Button;
+          import android.widget.EditText;
+          import android.widget.FrameLayout;
+          import android.widget.LinearLayout;
+          import android.widget.ScrollView;
+          import android.widget.TextView;
+          import android.widget.Toast;
+
+          import java.util.ArrayList;
+          import java.util.Locale;
+
+          public class MainActivity extends Activity {
+              private FrameLayout root;
+              private LinearLayout browserScreen;
+              private LinearLayout devScreen;
+              private WebView webView;
+              private EditText addressBar;
+              private TextView devOutput;
+              private TextView devTitle;
+              private EditText jsInput;
+
+              private final ArrayList<String> consoleLogs = new ArrayList<>();
+              private final ArrayList<String> networkLogs = new ArrayList<>();
+              private final ArrayList<String> privacyLogs = new ArrayList<>();
+
+              private boolean blockerEnabled = true;
+              private boolean desktopMode = false;
+              private int requestCount = 0;
+              private int blockedCount = 0;
+
+              @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  WebView.setWebContentsDebuggingEnabled(true);
+
+                  root = new FrameLayout(this);
+                  browserScreen = createBrowserScreen();
+                  devScreen = createDevScreen();
+                  devScreen.setVisibility(LinearLayout.GONE);
+
+                  root.addView(browserScreen);
+                  root.addView(devScreen);
+
+                  setContentView(root);
+                  configureWebView();
+
+                  Uri incoming = getIntent().getData();
+                  webView.loadUrl(incoming != null ? incoming.toString() : "https://google.com");
+              }
+
+              private LinearLayout createBrowserScreen() {
+                  LinearLayout screen = new LinearLayout(this);
+                  screen.setOrientation(LinearLayout.VERTICAL);
+                  screen.setBackgroundColor(Color.WHITE);
+
+                  LinearLayout top = new LinearLayout(this);
+                  top.setOrientation(LinearLayout.HORIZONTAL);
+                  top.setGravity(Gravity.CENTER_VERTICAL);
+                  top.setPadding(dp(6), dp(5), dp(6), dp(5));
+                  top.setBackgroundColor(Color.rgb(22, 22, 22));
+
+                  Button reload = makeButton("↻");
+                  addressBar = new EditText(this);
+                  addressBar.setSingleLine(true);
+                  addressBar.setTextSize(14);
+                  addressBar.setTextColor(Color.WHITE);
+                  addressBar.setHintTextColor(Color.GRAY);
+                  addressBar.setHint("Search or URL");
+                  addressBar.setBackgroundColor(Color.rgb(48, 48, 48));
+                  addressBar.setPadding(dp(10), 0, dp(10), 0);
+                  Button go = makeButton("Go");
+
+                  top.addView(reload, new LinearLayout.LayoutParams(dp(48), dp(46)));
+                  top.addView(addressBar, new LinearLayout.LayoutParams(0, dp(46), 1));
+                  top.addView(go, new LinearLayout.LayoutParams(dp(58), dp(46)));
+
+                  webView = new WebView(this);
+
+                  LinearLayout bottom = new LinearLayout(this);
+                  bottom.setOrientation(LinearLayout.HORIZONTAL);
+                  bottom.setGravity(Gravity.CENTER);
+                  bottom.setPadding(dp(4), dp(4), dp(4), dp(4));
+                  bottom.setBackgroundColor(Color.rgb(18, 18, 18));
+
+                  Button back = makeBottomButton("Back");
+                  Button next = makeBottomButton("Next");
+                  Button home = makeBottomButton("Home");
+                  Button dev = makeBottomButton("DEV");
+                  Button mode = makeBottomButton("Mode");
+
+                  bottom.addView(back, new LinearLayout.LayoutParams(0, dp(50), 1));
+                  bottom.addView(next, new LinearLayout.LayoutParams(0, dp(50), 1));
+                  bottom.addView(home, new LinearLayout.LayoutParams(0, dp(50), 1));
+                  bottom.addView(dev, new LinearLayout.LayoutParams(0, dp(50), 1));
+                  bottom.addView(mode, new LinearLayout.LayoutParams(0, dp(50), 1));
+
+                  screen.addView(top, new LinearLayout.LayoutParams(-1, dp(56)));
+                  screen.addView(webView, new LinearLayout.LayoutParams(-1, 0, 1));
+                  screen.addView(bottom, new LinearLayout.LayoutParams(-1, dp(58)));
+
+                  reload.setOnClickListener(v -> webView.reload());
+                  go.setOnClickListener(v -> loadAddress());
+                  addressBar.setOnEditorActionListener((v, actionId, event) -> {
+                      loadAddress();
+                      return true;
+                  });
+
+                  back.setOnClickListener(v -> { if (webView.canGoBack()) webView.goBack(); });
+                  next.setOnClickListener(v -> { if (webView.canGoForward()) webView.goForward(); });
+                  home.setOnClickListener(v -> webView.loadUrl("https://google.com"));
+                  dev.setOnClickListener(v -> showDevConsole());
+                  mode.setOnClickListener(v -> {
+                      desktopMode = !desktopMode;
+                      applyUserAgent();
+                      webView.reload();
+                      toast(desktopMode ? "Desktop mode" : "Mobile mode");
+                  });
+
+                  return screen;
+              }
+
+              private LinearLayout createDevScreen() {
+                  LinearLayout screen = new LinearLayout(this);
+                  screen.setOrientation(LinearLayout.VERTICAL);
+                  screen.setBackgroundColor(Color.rgb(8, 8, 8));
+                  screen.setPadding(dp(8), dp(8), dp(8), dp(8));
+
+                  LinearLayout header = new LinearLayout(this);
+                  header.setOrientation(LinearLayout.HORIZONTAL);
+                  header.setGravity(Gravity.CENTER_VERTICAL);
+
+                  devTitle = new TextView(this);
+                  devTitle.setText("DevTools");
+                  devTitle.setTextColor(Color.WHITE);
+                  devTitle.setTextSize(18);
+
+                  Button close = makeButton("Close");
+                  header.addView(devTitle, new LinearLayout.LayoutParams(0, dp(48), 1));
+                  header.addView(close, new LinearLayout.LayoutParams(dp(90), dp(48)));
+
+                  LinearLayout tabs = new LinearLayout(this);
+                  tabs.setOrientation(LinearLayout.HORIZONTAL);
+
+                  Button console = makeTabButton("Console");
+                  Button network = makeTabButton("Network");
+                  Button dom = makeTabButton("DOM");
+                  Button storage = makeTabButton("Store");
+                  Button privacy = makeTabButton("Privacy");
+
+                  tabs.addView(console, new LinearLayout.LayoutParams(0, dp(46), 1));
+                  tabs.addView(network, new LinearLayout.LayoutParams(0, dp(46), 1));
+                  tabs.addView(dom, new LinearLayout.LayoutParams(0, dp(46), 1));
+                  tabs.addView(storage, new LinearLayout.LayoutParams(0, dp(46), 1));
+                  tabs.addView(privacy, new LinearLayout.LayoutParams(0, dp(46), 1));
+
+                  devOutput = new TextView(this);
+                  devOutput.setTextColor(Color.rgb(0, 240, 120));
+                  devOutput.setTextSize(12);
+                  devOutput.setTextIsSelectable(true);
+                  devOutput.setPadding(dp(8), dp(8), dp(8), dp(8));
+
+                  ScrollView scroll = new ScrollView(this);
+                  scroll.addView(devOutput);
+
+                  jsInput = new EditText(this);
+                  jsInput.setSingleLine(false);
+                  jsInput.setMinLines(2);
+                  jsInput.setMaxLines(3);
+                  jsInput.setTextColor(Color.WHITE);
+                  jsInput.setHintTextColor(Color.GRAY);
+                  jsInput.setHint("JavaScript, example: document.title");
+                  jsInput.setBackgroundColor(Color.rgb(35, 35, 35));
+                  jsInput.setPadding(dp(8), dp(6), dp(8), dp(6));
+
+                  LinearLayout actions = new LinearLayout(this);
+                  actions.setOrientation(LinearLayout.HORIZONTAL);
+
+                  Button runJs = makeTabButton("Run JS");
+                  Button inspect = makeTabButton("Inspect");
+                  Button clear = makeTabButton("Clear");
+                  Button block = makeTabButton("Block");
+
+                  actions.addView(runJs, new LinearLayout.LayoutParams(0, dp(48), 1));
+                  actions.addView(inspect, new LinearLayout.LayoutParams(0, dp(48), 1));
+                  actions.addView(clear, new LinearLayout.LayoutParams(0, dp(48), 1));
+                  actions.addView(block, new LinearLayout.LayoutParams(0, dp(48), 1));
+
+                  screen.addView(header, new LinearLayout.LayoutParams(-1, dp(50)));
+                  screen.addView(tabs, new LinearLayout.LayoutParams(-1, dp(48)));
+                  screen.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+                  screen.addView(jsInput, new LinearLayout.LayoutParams(-1, dp(90)));
+                  screen.addView(actions, new LinearLayout.LayoutParams(-1, dp(50)));
+
+                  close.setOnClickListener(v -> devScreen.setVisibility(LinearLayout.GONE));
+                  console.setOnClickListener(v -> showDevConsole());
+                  network.setOnClickListener(v -> showNetwork());
+                  dom.setOnClickListener(v -> showDom());
+                  storage.setOnClickListener(v -> showStorage());
+                  privacy.setOnClickListener(v -> showPrivacy());
+                  runJs.setOnClickListener(v -> runJs());
+                  inspect.setOnClickListener(v -> showDom());
+                  clear.setOnClickListener(v -> devOutput.setText(""));
+                  block.setOnClickListener(v -> {
+                      blockerEnabled = !blockerEnabled;
+                      showPrivacy();
+                  });
+
+                  return screen;
+              }
+
+              @SuppressLint("SetJavaScriptEnabled")
+              private void configureWebView() {
+                  WebSettings settings = webView.getSettings();
+                  settings.setJavaScriptEnabled(true);
+                  settings.setDomStorageEnabled(true);
+                  settings.setDatabaseEnabled(true);
+                  settings.setUseWideViewPort(true);
+                  settings.setLoadWithOverviewMode(true);
+                  settings.setBuiltInZoomControls(true);
+                  settings.setDisplayZoomControls(false);
+                  settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+
+                  webView.addJavascriptInterface(new Bridge(), "NovaDev");
+
+                  webView.setWebViewClient(new WebViewClient() {
+                      @Override
+                      public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                          String url = request.getUrl().toString();
+                          requestCount++;
+                          add(networkLogs, request.getMethod() + " " + url);
+
+                          if (blockerEnabled && isBlocked(url)) {
+                              blockedCount++;
+                              add(privacyLogs, "Blocked: " + url);
+                              return new WebResourceResponse("text/plain", "utf-8", null);
+                          }
+
+                          return super.shouldInterceptRequest(view, request);
+                      }
+
+                      @Override
+                      public void onPageFinished(WebView view, String url) {
+                          addressBar.setText(url);
+                          add(consoleLogs, "Loaded: " + url);
+                          injectHooks();
+                          super.onPageFinished(view, url);
+                      }
+                  });
+
+                  webView.setWebChromeClient(new WebChromeClient() {
+                      @Override
+                      public boolean onConsoleMessage(ConsoleMessage message) {
+                          add(consoleLogs, message.messageLevel() + ": " + message.message());
+                          return true;
+                      }
+                  });
+
+                  webView.setDownloadListener(new DownloadListener() {
+                      @Override
+                      public void onDownloadStart(String url, String userAgent, String contentDisposition, String mimetype, long contentLength) {
+                          try {
+                              String fileName = URLUtil.guessFileName(url, contentDisposition, mimetype);
+                              DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+                              request.setMimeType(mimetype);
+                              request.addRequestHeader("User-Agent", userAgent);
+                              request.setTitle(fileName);
+                              request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                              request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
+                              ((DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE)).enqueue(request);
+                              toast("Download started");
+                          } catch (Exception e) {
+                              add(consoleLogs, "Download error: " + e.getMessage());
+                          }
+                      }
+                  });
+              }
+
+              private void injectHooks() {
+                  String js =
+                      "(function(){if(window.__nova)return;window.__nova=true;" +
+                      "var oldLog=console.log;console.log=function(){try{NovaDev.log(Array.from(arguments).join(' '));}catch(e){} oldLog.apply(console,arguments);};" +
+                      "var oldWarn=console.warn;console.warn=function(){try{NovaDev.log('WARN '+Array.from(arguments).join(' '));}catch(e){} oldWarn.apply(console,arguments);};" +
+                      "var oldError=console.error;console.error=function(){try{NovaDev.log('ERROR '+Array.from(arguments).join(' '));}catch(e){} oldError.apply(console,arguments);};" +
+                      "var f=window.fetch;if(f){window.fetch=function(){try{NovaDev.net('FETCH '+arguments[0]);}catch(e){} return f.apply(this,arguments);};}" +
+                      "})();";
+                  webView.evaluateJavascript(js, null);
+              }
+
+              private void loadAddress() {
+                  String input = addressBar.getText().toString().trim();
+                  if (input.isEmpty()) return;
+
+                  if (input.contains(".") && !input.contains(" ")) {
+                      if (!input.startsWith("http://") && !input.startsWith("https://")) input = "https://" + input;
+                  } else {
+                      input = "https://www.google.com/search?q=" + Uri.encode(input);
+                  }
+
+                  webView.loadUrl(input);
+              }
+
+              private void showDevConsole() {
+                  showDev("Console", consoleLogs);
+              }
+
+              private void showNetwork() {
+                  showDev("Network", networkLogs);
+              }
+
+              private void showDev(String title, ArrayList<String> lines) {
+                  devScreen.setVisibility(LinearLayout.VISIBLE);
+                  devTitle.setText("DevTools • " + title);
+                  StringBuilder out = new StringBuilder();
+                  for (String line : lines) out.append(line).append("\n");
+                  devOutput.setText(out.toString());
+              }
+
+              private void showDom() {
+                  devScreen.setVisibility(LinearLayout.VISIBLE);
+                  devTitle.setText("DevTools • DOM");
+                  webView.evaluateJavascript(
+                      "(function(){return document.documentElement.outerHTML.substring(0,12000);})()",
+                      value -> devOutput.setText(clean(value))
+                  );
+              }
+
+              private void showStorage() {
+                  devScreen.setVisibility(LinearLayout.VISIBLE);
+                  devTitle.setText("DevTools • Storage");
+                  String js =
+                      "(function(){var out=[];" +
+                      "out.push('URL: '+location.href);" +
+                      "out.push('\\nCookies: '+document.cookie);" +
+                      "out.push('\\nlocalStorage:');" +
+                      "for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);out.push(k+' = '+localStorage.getItem(k));}" +
+                      "out.push('\\nsessionStorage:');" +
+                      "for(var j=0;j<sessionStorage.length;j++){var s=sessionStorage.key(j);out.push(s+' = '+sessionStorage.getItem(s));}" +
+                      "return out.join('\\n');})()";
+                  webView.evaluateJavascript(js, value -> devOutput.setText(clean(value)));
+              }
+
+              private void showPrivacy() {
+                  devScreen.setVisibility(LinearLayout.VISIBLE);
+                  devTitle.setText("DevTools • Privacy");
+                  StringBuilder out = new StringBuilder();
+                  out.append("Blocker: ").append(blockerEnabled ? "ON" : "OFF").append("\n");
+                  out.append("Desktop mode: ").append(desktopMode ? "ON" : "OFF").append("\n");
+                  out.append("Requests: ").append(requestCount).append("\n");
+                  out.append("Blocked: ").append(blockedCount).append("\n\n");
+                  for (String line : privacyLogs) out.append(line).append("\n");
+                  devOutput.setText(out.toString());
+              }
+
+              private void runJs() {
+                  String code = jsInput.getText().toString().trim();
+                  if (code.isEmpty()) return;
+
+                  String wrapped = "(function(){try{return String(" + code + ");}catch(e){return 'ERROR: '+e.message;}})()";
+                  webView.evaluateJavascript(wrapped, value -> {
+                      devScreen.setVisibility(LinearLayout.VISIBLE);
+                      devTitle.setText("DevTools • JS Result");
+                      devOutput.setText(clean(value));
+                  });
+              }
+
+              private boolean isBlocked(String url) {
+                  String u = url.toLowerCase(Locale.US);
+                  return u.contains("doubleclick")
+                      || u.contains("googlesyndication")
+                      || u.contains("google-analytics")
+                      || u.contains("facebook.net")
+                      || u.contains("adservice")
+                      || u.contains("tracking")
+                      || u.contains("analytics")
+                      || u.contains("hotjar");
+              }
+
+              private void applyUserAgent() {
+                  if (desktopMode) {
+                      webView.getSettings().setUserAgentString(
+                          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/125 Safari/537.36"
+                      );
+                  } else {
+                      webView.getSettings().setUserAgentString(null);
+                  }
+              }
+
+              private void add(ArrayList<String> list, String value) {
+                  runOnUiThread(() -> {
+                      list.add(value);
+                      if (list.size() > 500) list.remove(0);
+                  });
+              }
+
+              private String clean(String value) {
+                  if (value == null) return "";
+                  if (value.startsWith("\"") && value.endsWith("\"")) value = value.substring(1, value.length() - 1);
+                  return value.replace("\\n", "\n").replace("\\\"", "\"").replace("\\\\", "\\");
+              }
+
+              private Button makeButton(String text) {
+                  Button b = new Button(this);
+                  b.setText(text);
+                  b.setAllCaps(false);
+                  b.setTextSize(12);
+                  b.setTextColor(Color.WHITE);
+                  b.setBackgroundColor(Color.rgb(45, 45, 45));
+                  b.setPadding(0, 0, 0, 0);
+                  return b;
+              }
+
+              private Button makeBottomButton(String text) {
+                  Button b = makeButton(text);
+                  b.setTextSize(11);
+                  return b;
+              }
+
+              private Button makeTabButton(String text) {
+                  Button b = makeButton(text);
+                  b.setTextSize(10);
+                  return b;
+              }
+
+              private int dp(int value) {
+                  return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
+              }
+
+              private void toast(String text) {
+                  Toast.makeText(this, text, Toast.LENGTH_SHORT).show();
+              }
+
+              @Override
+              public void onBackPressed() {
+                  if (devScreen != null && devScreen.getVisibility() == LinearLayout.VISIBLE) {
+                      devScreen.setVisibility(LinearLayout.GONE);
+                  } else if (webView != null && webView.canGoBack()) {
+                      webView.goBack();
+                  } else {
+                      super.onBackPressed();
+                  }
+              }
+
+              public class Bridge {
+                  @JavascriptInterface public void log(String message) { add(consoleLogs, "JS: " + message); }
+                  @JavascriptInterface public void net(String message) { add(networkLogs, message); }
+              }
+          }
+          EOF
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      - name: Build APK
+        run: gradle assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: NovaBrowserPhoneClean-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
